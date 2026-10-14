@@ -1,2 +1,2 @@
 # reception-scanner
-QRコード受付システム（任意）
+QRコード受付システム
