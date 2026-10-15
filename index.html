@@ -1,88 +1,310 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#101827">
-  <title>受付 QRコードスキャナー（読み取りテスト）</title>
-  <style>
-    :root { color-scheme: light; font-family: system-ui, -apple-system, "Noto Sans JP", sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #f4f6fa; color: #172033; }
-    main { max-width: 520px; margin: 0 auto; padding: 28px 18px 42px; }
-    h1 { font-size: 1.35rem; margin: 0 0 8px; }
-    p { line-height: 1.65; }
-    .muted { color: #536174; font-size: .9rem; }
-    .panel { background: #fff; border: 1px solid #dfe5ef; border-radius: 14px; padding: 16px; margin-top: 18px; }
-    #reader { width: 100%; overflow: hidden; border-radius: 12px; }
-    #reader video { max-width: 100%; border-radius: 10px; }
-    button { display: block; margin-top: 14px; width: 100%; border: 0; background: #1f5aa6; color: #fff; padding: 15px; border-radius: 10px; font-weight: 700; font-size: 1rem; cursor: pointer; }
-    button:disabled { opacity: .55; cursor: default; }
-    #result { padding: 12px 14px; background: #edf3fb; border-radius: 8px; font-size: 1rem; min-height: 3rem; overflow-wrap: anywhere; }
-    .note { border-left: 4px solid #aebbd1; padding-left: 12px; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12253b">
+<title>忘年会 | QR受付</title>
+<style>
+  :root { color-scheme:light; font-family: system-ui, -apple-system, "Noto Sans JP", sans-serif; }
+  * { box-sizing:border-box; }
+  body { margin:0; color:#17243a; background:#f0f4f8; }
+  main { max-width:560px; margin:0 auto; padding:24px 16px 48px; }
+  header { margin-bottom:17px; }
+  h1 { font-size:1.45rem; margin:0 0 6px; }
+  h2 { font-size:1rem; margin:0 0 12px; }
+  p { line-height:1.6; }
+  .muted { color:#627088; font-size:.87rem; }
+  .panel { background:white; padding:19px; border:1px solid #dee5ed; border-radius:16px; margin-top:14px; }
+  label { font-size:.88rem; display:block; font-weight:650; margin:14px 0 5px; }
+  input { width:100%; font-size:16px; border:1px solid #bcc9d8; border-radius:10px; padding:12px; color:#142238; background:white; }
+  input:focus { outline:2px solid #5d8fc3; outline-offset:1px; }
+  button { display:block; width:100%; border:0; border-radius:11px; padding:14px; margin-top:13px; cursor:pointer; background:#1e5c9f; color:#fff; font-size:1rem; font-weight:700; }
+  button:disabled { opacity:.55; cursor:default; }
+  button.ghost { color:#355779; background:#e9f0f8; }
+  #reader { width:100%; margin-top:14px; overflow:hidden; border-radius:12px; }
+  #reader video { max-width:100%; border-radius:10px; }
+  .result { border-radius:14px; min-height:145px; padding:22px 14px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; background:#edf1f6; }
+  .result strong { font-size:1.7rem; line-height:1.4; }
+  .result small { margin-top:7px; font-size:.88rem; color:#53627c; }
+  .result.success { background:#e5f6ed; color:#14633b; }
+  .result.notice { background:#fff2dc; color:#925300; }
+  .result.error { background:#fee9e8; color:#ae302b; }
+  .result.wait { background:#e7f0ff; color:#254d85; }
+  #status { margin:12px 0 2px; min-height:1.5em; }
+  .hidden { display:none !important; }
+  .footnote { margin-top:18px; color:#5a6980; font-size:.83rem; }
+</style>
 </head>
 <body>
-  <main>
-    <h1>QRコード受付</h1>
-    <p class="muted">読み取り動作確認用です。このページはGASに送信せず、受付状態も更新しません。</p>
-    <section class="panel">
-      <div id="reader" aria-label="QRコード読み取りカメラ"></div>
-      <button id="start" type="button">カメラで読み取り開始</button>
-      <p id="status" class="muted" aria-live="polite">開始ボタンを押してください。</p>
-    </section>
-    <section class="panel">
-      <h2 style="font-size:1rem; margin-top:0">読み取り結果</h2>
-      <div id="result" aria-live="polite">未読み取り</div>
-    </section>
-    <p class="muted note">このテストではQRコードの内容を端末上に表示するだけです。名簿・メールアドレスなどはGitHub Pagesに保存しないでください。</p>
-  </main>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
-  <script>
-    const button = document.getElementById('start');
-    const status = document.getElementById('status');
-    const result = document.getElementById('result');
-    let scanner = null;
-    let reading = false;
+<main>
+  <header>
+    <h1>忘年会 QRコード受付</h1>
+    <div class="muted">Androidのカメラで読み取って、そのまま来客名簿を更新します。</div>
+  </header>
 
-    button.addEventListener('click', async () => {
-      if (reading) return;
-      if (typeof Html5Qrcode === 'undefined') {
-        status.textContent = '読み取りライブラリを読み込めませんでした。通信環境を確認してください。';
-        return;
-      }
-      button.disabled = true;
-      status.textContent = 'カメラを起動しています。アクセスの確認が出たら許可してください。';
-      scanner = new Html5Qrcode('reader');
-      let completed = false;
-      try {
-        await scanner.start(
-          { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 220, height: 220 } },
-          async (decodedText) => {
-            if (completed) return;
-            completed = true;
-            result.textContent = `読み取り結果：${decodedText}`;
-            status.textContent = /^TP-\d{4,}$/.test(decodedText)
-              ? '受付IDの形式を確認しました（まだ送信していません）。'
-              : '読み取り成功（受付IDとは異なる形式です）。';
-            try { await scanner.stop(); } catch (error) { console.error(error); }
-            try { scanner.clear(); } catch (error) { console.error(error); }
-            reading = false;
-            button.textContent = '次のQRコードを読み取る';
-            button.disabled = false;
-          },
-          () => { /* 読み取れないフレームは無視 */ }
-        );
-        reading = true;
-        if (!completed) status.textContent = 'QRコードをカメラに向けてください。';
-      } catch (error) {
-        console.error(error);
-        reading = false;
-        button.disabled = false;
-        status.textContent = 'カメラを起動できませんでした。Chromeのカメラ権限を確認してください。';
-      }
-    });
-  </script>
+  <section id="settings" class="panel">
+    <h2>初回設定</h2>
+    <p class="muted">WebアプリURLは端末に保存します。受付キーは保存せず、画面を開くたびに入力してください。</p>
+    <label for="apiUrl">GAS WebアプリURL（/exec）</label>
+    <input id="apiUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://script.google.com/macros/s/.../exec">
+    <label for="staffKey">受付スタッフ用キー</label>
+    <input id="staffKey" type="password" autocomplete="off" placeholder="GASのスクリプトプロパティに設定した値">
+    <button id="connect" type="button">接続確認して受付開始</button>
+    <p class="muted" id="setupStatus" role="status" aria-live="polite"></p>
+  </section>
+
+  <section id="scannerPanel" class="panel hidden">
+    <h2>QRコードを読み取る</h2>
+    <div id="reader" aria-label="QRコードを読み取るカメラ"></div>
+    <p class="muted" id="status" role="status" aria-live="polite">カメラを起動してください。</p>
+    <button id="start" type="button">カメラを起動</button>
+    <button id="editSettings" type="button" class="ghost">接続設定に戻る</button>
+  </section>
+
+  <section class="panel">
+    <h2>受付結果</h2>
+    <div id="result" class="result" role="status" aria-live="polite">
+      <strong id="resultText">受付待機中</strong>
+      <small id="resultDetail">QRコードを読み取ってください。</small>
+    </div>
+    <button id="next" type="button" class="ghost hidden">次を読み取る（再スキャン）</button>
+  </section>
+  <p class="footnote">個人情報はこのページに保存しません。受付用の文字列と受付キーだけをGASに送信します。通信結果が確認できないときは、来客名簿のE・F列を確認してください。</p>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const urlInput = $('apiUrl');
+const keyInput = $('staffKey');
+const connect = $('connect');
+const startButton = $('start');
+const nextButton = $('next');
+let apiUrl = '';
+let staffKey = ''; // メモリ内だけに保存。localStorageには入れない。
+let scanner = null;
+let active = false;
+let busy = false;
+let starting = false;
+let lastToken = ''; // カメラ前に同じQRが残っているときの連続発火防止。
+let sequence = 0;
+urlInput.value = localStorage.getItem('reception_gas_url') || '';
+
+function updateStatus(text) { $('status').textContent = text; }
+function showResult(state, title, detail) {
+  $('result').className = 'result' + (state ? ' ' + state : '');
+  $('resultText').textContent = title;
+  $('resultDetail').textContent = detail || '';
+}
+function makeId() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+/**
+ * GASが公式にサポートするJSONP方式。
+ * doGetは読み取り専用で、個人情報や受付キーを返さない。
+ */
+function getJsonp(action, requestId = '') {
+  return new Promise((resolve, reject) => {
+    const requestNonce = makeId();
+    const callback = 'qrCallback_' + requestNonce;
+    let done = false;
+    const script = document.createElement('script');
+    const clear = () => {
+      if (done) return false;
+      done = true;
+      clearTimeout(timeout);
+      script.remove();
+      try { delete window[callback]; } catch (_) { window[callback] = undefined; }
+      return true;
+    };
+    window[callback] = response => {
+      if (clear()) resolve(response);
+    };
+    const timeout = setTimeout(() => {
+      if (clear()) reject(new Error('GASからの応答がありません'));
+    }, 6500);
+    script.onerror = () => {
+      if (clear()) reject(new Error('GASへ接続できません'));
+    };
+    const params = new URLSearchParams({action, callback, v: requestNonce});
+    if (requestId) params.set('requestId', requestId);
+    script.src = apiUrl + '?' + params.toString();
+    document.head.appendChild(script);
+  });
+}
+
+connect.addEventListener('click', async () => {
+  const candidate = urlInput.value.trim();
+  const inputKey = keyInput.value;
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec$/.test(candidate)) {
+    $('setupStatus').textContent = 'GASの /exec で終わるURLを入力してください。';
+    return;
+  }
+  if (inputKey.length < 12) {
+    $('setupStatus').textContent = '受付キーは12文字以上にしてください。';
+    return;
+  }
+  apiUrl = candidate;
+  connect.disabled = true;
+  $('setupStatus').textContent = 'GASと接続確認中…';
+  try {
+    const response = await getJsonp('ping');
+    if (response.state !== 'ready') throw new Error('接続確認の結果が不正です');
+    localStorage.setItem('reception_gas_url', apiUrl);
+    staffKey = inputKey;
+    keyInput.value = ''; // 入力欄内にも残さない。
+    $('settings').classList.add('hidden');
+    $('scannerPanel').classList.remove('hidden');
+    $('setupStatus').textContent = '';
+    await startCamera();
+  } catch (error) {
+    $('setupStatus').textContent = error.message;
+  } finally {
+    connect.disabled = false;
+  }
+});
+
+async function stopCamera() {
+  if (!scanner || !active) return;
+  try { await scanner.stop(); } catch (error) { console.warn(error); }
+  active = false;
+}
+async function startCamera() {
+  if (active || starting || busy) return;
+  if (typeof Html5Qrcode === 'undefined') {
+    updateStatus('QRライブラリを読み込めませんでした。ネット接続を確認してください。');
+    return;
+  }
+  starting = true;
+  startButton.disabled = true;
+  updateStatus('カメラを起動しています…');
+  try {
+    if (!scanner) scanner = new Html5Qrcode('reader');
+    await scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 220, height: 220 } },
+      text => { void onScan(text); },
+      () => {}
+    );
+    active = true;
+    updateStatus('QRコードをカメラに向けてください。');
+    startButton.classList.add('hidden');
+  } catch (error) {
+    console.error(error);
+    updateStatus('カメラを起動できませんでした。カメラの許可を確認してください。');
+    startButton.classList.remove('hidden');
+  } finally {
+    starting = false;
+    startButton.disabled = false;
+  }
+}
+
+async function onScan(decoded) {
+  if (busy || !active) return;
+  const token = String(decoded).trim().toUpperCase();
+  if (token === lastToken) return;
+  busy = true;
+  lastToken = token;
+  sequence++;
+  const current = sequence;
+  await stopCamera();
+  nextButton.classList.remove('hidden');
+  startButton.classList.add('hidden');
+
+  if (!/^TP-\d{4,}$/.test(token)) {
+    showResult('error', 'QRコードの形式が違います', '受付用のTP-0001形式ではありません。');
+    updateStatus('次のQRコードを読み取ってください。');
+    busy = false;
+    scheduleNext(current);
+    return;
+  }
+
+  showResult('wait', '受付処理中…', token);
+  updateStatus('GASへ受付IDを送信しています。');
+  const requestId = makeId();
+
+  // Google Apps Scriptは通常のCORS対応APIではない。
+  // POSTはno-corsで送信し、結果のみ読み取り専用JSONPで受け取る。
+  const post = fetch(apiUrl, {
+    method: 'POST',
+    mode: 'no-cors',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ requestId, token, staffKey })
+  }).catch(error => { console.warn('POST通信:', error); });
+
+  let result = null;
+  const deadline = Date.now() + 27000;
+  while (Date.now() < deadline) {
+    await wait(850);
+    try {
+      const response = await getJsonp('result', requestId);
+      if (response.state !== 'pending') { result = response; break; }
+    } catch (error) {
+      console.warn('状態取得:', error);
+    }
+  }
+  void post; // 複数回の自動POSTはしない。タイムアウト時は名簿確認を促す。
+
+  if (!result) {
+    showResult('error', '通信結果を確認できません', '受付できている可能性があります。名簿を確認してください。');
+    updateStatus('通信タイムアウト。自動再送しません。');
+  } else if (result.state === 'ok') {
+    showResult('success', '受付完了', token);
+    updateStatus('受付を記録しました。');
+  } else if (result.state === 'already') {
+    showResult('notice', 'すでに受付済みです', token);
+    updateStatus('受付情報は変更していません。');
+  } else if (result.state === 'auth_error' || result.state === 'config_error') {
+    showResult('error', result.message, '受付設定を確認してください。');
+    updateStatus('受付設定に戻って修正してください。');
+    busy = false;
+    nextButton.classList.add('hidden');
+    startButton.classList.remove('hidden');
+    return;
+  } else {
+    showResult('error', result.message || '受付に失敗しました', token);
+    updateStatus('結果をご確認ください。');
+  }
+  busy = false;
+  scheduleNext(current);
+}
+
+function scheduleNext(id) {
+  updateStatus($('status').textContent + ' まもなく次の読み取りを開始します。');
+  setTimeout(() => {
+    if (id === sequence && !busy && !$('scannerPanel').classList.contains('hidden')) {
+      void startCamera();
+    }
+  }, 2000);
+}
+
+startButton.addEventListener('click', () => { lastToken = ''; void startCamera(); });
+nextButton.addEventListener('click', () => {
+  lastToken = '';
+  sequence++;
+  if (active) {
+    // 撮影中なら次のQRを読み込めるようにガードのみ解除。
+    updateStatus('次のQRコードを読み取れます。');
+  } else if (!busy) {
+    void startCamera();
+  }
+});
+$('editSettings').addEventListener('click', async () => {
+  sequence++;
+  await stopCamera();
+  staffKey = '';
+  lastToken = '';
+  busy = false;
+  $('scannerPanel').classList.add('hidden');
+  $('settings').classList.remove('hidden');
+  showResult('', '受付待機中', '設定を確認してください。');
+});
+</script>
 </body>
 </html>
