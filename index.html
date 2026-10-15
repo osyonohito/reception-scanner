@@ -33,6 +33,7 @@
   .result.wait { background:#e7f0ff; color:#254d85; }
   #status { margin:12px 0 2px; min-height:1.5em; }
   .hidden { display:none !important; }
+  #diagnosticLog { background:#101827; color:#d9edff; border-radius:10px; padding:12px; font-size:.8rem; white-space:pre-wrap; overflow-wrap:anywhere; min-height:60px; max-height:250px; overflow-y:auto; }
   .footnote { margin-top:18px; color:#5a6980; font-size:.83rem; }
 </style>
 </head>
@@ -52,6 +53,13 @@
     <input id="staffKey" type="password" autocomplete="off" placeholder="GASのスクリプトプロパティに設定した値">
     <button id="connect" type="button">接続確認して受付開始</button>
     <p class="muted" id="setupStatus" role="status" aria-live="polite"></p>
+    <button type="button" id="diagnose" class="ghost">通信診断（受付は実行しません）</button>
+    <details id="diagnostics">
+      <summary style="margin:16px 0 8px;cursor:pointer">通信診断ログを表示</summary>
+      <p class="muted">受付キー・氏名・メールアドレスは表示されません。ログをコピーして共有できます。</p>
+      <pre id="diagnosticLog" aria-live="polite">診断はまだ実行されていません。</pre>
+      <button type="button" id="copyDiagnostic" class="ghost">診断ログをコピー</button>
+    </details>
   </section>
 
   <section id="scannerPanel" class="panel hidden">
@@ -104,16 +112,29 @@ function makeId() {
 }
 function wait(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
-/**
- * GASが公式にサポートするJSONP方式。
- * doGetは読み取り専用で、個人情報や受付キーを返さない。
- */
-function getJsonp(action, requestId = '') {
+/** GASからの応答を診断可能なJSONP通信。読み取り専用のGETのみ。 */
+function logDiagnostic(message) {
+  const log = $('diagnosticLog');
+  const time = new Date().toLocaleTimeString('ja-JP', {hour12:false});
+  if (log.textContent === '診断はまだ実行されていません。') log.textContent = '';
+  log.textContent += '[' + time + '] ' + message + '\n';
+  log.scrollTop = log.scrollHeight;
+}
+function validateUrl() {
+  const candidate = urlInput.value.trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec$/.test(candidate)) {
+    throw new Error('GASの /exec で終わるURLを入力してください。');
+  }
+  return candidate;
+}
+function getJsonp(action, requestId = '', timeoutMs = 15000) {
   return new Promise((resolve, reject) => {
     const requestNonce = makeId();
     const callback = 'qrCallback_' + requestNonce;
     let done = false;
+    let callbackReached = false;
     const script = document.createElement('script');
+    const started = Date.now();
     const clear = () => {
       if (done) return false;
       done = true;
@@ -123,36 +144,93 @@ function getJsonp(action, requestId = '') {
       return true;
     };
     window[callback] = response => {
+      callbackReached = true;
+      logDiagnostic(action + ': コールバック成功 (' + (Date.now() - started) + 'ms, state=' + String(response.state) + ')');
       if (clear()) resolve(response);
     };
-    // GASは初回アクセス時に起動が遅れることがあるため、
-    // 以前の6.5秒から延長。登録/照合の処理自体は変更しない。
-    const timeoutMs = action === 'ping' ? 25000 : 12000;
     const timeout = setTimeout(() => {
-      if (clear()) reject(new Error('GASからの応答が時間内に届きませんでした（' +
-        Math.round(timeoutMs / 1000) + '秒）。接続先URLとGASのデプロイ設定を確認してください。'));
+      if (clear()) {
+        logDiagnostic(action + ': ' + timeoutMs + 'ms応答なし（script.onload / onerror も発生せず）');
+        reject(new Error('GASの応答が時間内に届きませんでした。診断ログを確認してください。'));
+      }
     }, timeoutMs);
     script.onerror = () => {
-      if (clear()) reject(new Error('GASの応答を読み込めませんでした。GASの公開範囲とデプロイを確認してください。'));
+      logDiagnostic(action + ': script.onerror (' + (Date.now() - started) + 'ms。通信・リダイレクト・アクセス制限の可能性)');
+      if (clear()) reject(new Error('GASのスクリプト応答を読み込めませんでした。診断ログを確認してください。'));
     };
     script.onload = () => {
-      // スクリプトの取得自体は成功したのに、JSONPの関数が呼ばれない場合。
-      if (clear()) reject(new Error('GASの応答は届きましたが、受付ページで実行できませんでした。GASを新バージョンで再デプロイしてください。'));
+      if (!callbackReached) {
+        logDiagnostic(action + ': script.onload は発生したがコールバックなし (' + (Date.now() - started) + 'ms。応答内容または公開バージョンを確認)');
+        if (clear()) reject(new Error('GASからJavaScriptが返りましたが、応答関数が呼ばれませんでした。'));
+      }
     };
     const params = new URLSearchParams({action, callback, v: requestNonce});
     if (requestId) params.set('requestId', requestId);
     script.src = apiUrl + '?' + params.toString();
+    logDiagnostic(action + ': リクエスト開始（コールバック名・URL・キーは非表示）');
     document.head.appendChild(script);
   });
 }
-
-connect.addEventListener('click', async () => {
-  const candidate = urlInput.value.trim();
-  const inputKey = keyInput.value;
-  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec$/.test(candidate)) {
-    $('setupStatus').textContent = 'GASの /exec で終わるURLを入力してください。';
+async function pingWithRetry() {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    logDiagnostic('接続確認 ' + attempt + '/2');
+    try {
+      const result = await getJsonp('ping', '', attempt === 1 ? 14000 : 20000);
+      if (result.state !== 'ready') throw new Error('GAS応答形式エラー: ' + String(result.state));
+      return result;
+    } catch (err) {
+      lastError = err;
+      logDiagnostic('接続確認 ' + attempt + '/2 失敗: ' + err.message);
+      if (attempt === 1) await wait(600);
+    }
+  }
+  throw lastError;
+}
+$('diagnose').addEventListener('click', async () => {
+  const btn = $('diagnose');
+  try {
+    apiUrl = validateUrl();
+  } catch (error) {
+    $('setupStatus').textContent = error.message;
     return;
   }
+  $('diagnostics').open = true;
+  $('diagnosticLog').textContent = '';
+  logDiagnostic('診断開始: ブラウザ=' + navigator.userAgent.replace(/[^a-zA-Z0-9. ();/-]/g, '').slice(0,120));
+  logDiagnostic('接続状態: ' + (navigator.onLine ? 'オンライン' : 'オフライン'));
+  btn.disabled = true;
+  $('setupStatus').textContent = '通信診断中…';
+  try {
+    await pingWithRetry();
+    $('setupStatus').textContent = 'GAS応答確認OK。受付開始ボタンを押してください。';
+    logDiagnostic('診断成功。QR受付に進めます。');
+  } catch(error) {
+    $('setupStatus').textContent = error.message;
+    logDiagnostic('診断失敗。ログをコピーして共有してください。');
+  } finally {
+    btn.disabled = false;
+  }
+});
+$('copyDiagnostic').addEventListener('click', async () => {
+  const value = $('diagnosticLog').textContent;
+  try {
+    await navigator.clipboard.writeText(value);
+    $('setupStatus').textContent = 'ログをコピーしました。';
+  } catch(error) {
+    $('setupStatus').textContent = 'コピーできませんでした。診断ログを手動で選択してください。';
+  }
+});
+
+connect.addEventListener('click', async () => {
+  let candidate;
+  try {
+    candidate = validateUrl();
+  } catch(error) {
+    $('setupStatus').textContent = error.message;
+    return;
+  }
+  const inputKey = keyInput.value;
   if (inputKey.length < 12) {
     $('setupStatus').textContent = '受付キーは12文字以上にしてください。';
     return;
@@ -161,8 +239,8 @@ connect.addEventListener('click', async () => {
   connect.disabled = true;
   $('setupStatus').textContent = 'GASと接続確認中…';
   try {
-    const response = await getJsonp('ping');
-    if (response.state !== 'ready') throw new Error('接続確認の結果が不正です');
+    $('diagnostics').open = true;
+    await pingWithRetry();
     localStorage.setItem('reception_gas_url', apiUrl);
     staffKey = inputKey;
     keyInput.value = ''; // 入力欄内にも残さない。
