@@ -125,11 +125,19 @@ function getJsonp(action, requestId = '') {
     window[callback] = response => {
       if (clear()) resolve(response);
     };
+    // GASは初回アクセス時に起動が遅れることがあるため、
+    // 以前の6.5秒から延長。登録/照合の処理自体は変更しない。
+    const timeoutMs = action === 'ping' ? 25000 : 12000;
     const timeout = setTimeout(() => {
-      if (clear()) reject(new Error('GASからの応答がありません'));
-    }, 6500);
+      if (clear()) reject(new Error('GASからの応答が時間内に届きませんでした（' +
+        Math.round(timeoutMs / 1000) + '秒）。接続先URLとGASのデプロイ設定を確認してください。'));
+    }, timeoutMs);
     script.onerror = () => {
-      if (clear()) reject(new Error('GASへ接続できません'));
+      if (clear()) reject(new Error('GASの応答を読み込めませんでした。GASの公開範囲とデプロイを確認してください。'));
+    };
+    script.onload = () => {
+      // スクリプトの取得自体は成功したのに、JSONPの関数が呼ばれない場合。
+      if (clear()) reject(new Error('GASの応答は届きましたが、受付ページで実行できませんでした。GASを新バージョンで再デプロイしてください。'));
     };
     const params = new URLSearchParams({action, callback, v: requestNonce});
     if (requestId) params.set('requestId', requestId);
