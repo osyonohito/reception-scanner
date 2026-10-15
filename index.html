@@ -35,6 +35,19 @@
   .hidden { display:none !important; }
   #diagnosticLog { background:#101827; color:#d9edff; border-radius:10px; padding:12px; font-size:.8rem; white-space:pre-wrap; overflow-wrap:anywhere; min-height:60px; max-height:250px; overflow-y:auto; }
   .footnote { margin-top:18px; color:#5a6980; font-size:.83rem; }
+  .live-indicator { color:#135934; font-weight:700; font-size:.9rem; }
+  #queueStatus { margin:8px 0 0; color:#38516a; font-size:.9rem; }
+  #history { list-style:none; padding:0; margin:8px 0 0; max-height:310px; overflow-y:auto; }
+  #history li { border-bottom:1px solid #e7ebef; padding:10px 0; display:flex; gap:12px; justify-content:space-between; align-items:center; }
+  #history li:last-child { border-bottom:0; }
+  .entryToken { font-weight:700; font-variant-numeric:tabular-nums; }
+  .entryState { color:#486075; font-size:.88rem; text-align:right; }
+  .entryState.success { color:#14633b; }
+  .entryState.notice { color:#925300; }
+  .entryState.error { color:#ae302b; }
+  .save-option { display:flex; align-items:flex-start; gap:10px; font-size:.9rem; line-height:1.5; cursor:pointer; }
+  .save-option input { flex:0 0 19px; width:19px; height:19px; margin:1px 0 0; }
+  .save-option span { flex:1; }
 </style>
 </head>
 <body>
@@ -45,13 +58,19 @@
   </header>
 
   <section id="settings" class="panel">
-    <h2>初回設定</h2>
-    <p class="muted">WebアプリURLは端末に保存します。受付キーは保存せず、画面を開くたびに入力してください。</p>
+    <h2>受付の接続設定</h2>
+    <p id="savedNotice" class="muted hidden" role="status">この端末には受付設定が保存されています。入力し直さずに受付を開始できます。</p>
+    <p class="muted">最初にGASのURLと受付キーを設定します。専用のAndroid端末なら保存して次回から再入力を省略できます。</p>
     <label for="apiUrl">GAS WebアプリURL（/exec）</label>
     <input id="apiUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://script.google.com/macros/s/.../exec">
     <label for="staffKey">受付スタッフ用キー</label>
-    <input id="staffKey" type="password" autocomplete="off" placeholder="GASのスクリプトプロパティに設定した値">
+    <input id="staffKey" type="password" autocomplete="off" placeholder="受付キーを入力">
+    <label class="save-option" for="rememberSettings">
+      <input id="rememberSettings" type="checkbox">
+      <span>この端末に受付URLと受付キーを保存する<small class="muted" style="display:block;font-weight:400">端末内のブラウザに保存されます。専用・画面ロック付き端末だけで使用してください。共有端末では選ばないでください。</small></span>
+    </label>
     <button id="connect" type="button">接続確認して受付開始</button>
+    <button id="clearSaved" type="button" class="ghost hidden">この端末の保存設定を削除</button>
     <p class="muted" id="setupStatus" role="status" aria-live="polite"></p>
     <button type="button" id="diagnose" class="ghost">通信診断（受付は実行しません）</button>
     <details id="diagnostics">
@@ -63,9 +82,11 @@
   </section>
 
   <section id="scannerPanel" class="panel hidden">
-    <h2>QRコードを読み取る</h2>
+    <h2>QRコードを連続で読み取る</h2>
+    <p class="live-indicator">カメラは停止しません。次の方のQRコードを続けてかざしてください。</p>
     <div id="reader" aria-label="QRコードを読み取るカメラ"></div>
     <p class="muted" id="status" role="status" aria-live="polite">カメラを起動してください。</p>
+    <p id="queueStatus" role="status" aria-live="polite">処理待ち：0件</p>
     <button id="start" type="button">カメラを起動</button>
     <button id="editSettings" type="button" class="ghost">接続設定に戻る</button>
   </section>
@@ -76,9 +97,10 @@
       <strong id="resultText">受付待機中</strong>
       <small id="resultDetail">QRコードを読み取ってください。</small>
     </div>
-    <button id="next" type="button" class="ghost hidden">次を読み取る（再スキャン）</button>
+    <h2 style="margin:18px 0 4px">最近の読み取り（最新8件）</h2>
+    <ul id="history" aria-label="受付処理状況"></ul>
   </section>
-  <p class="footnote">個人情報はこのページに保存しません。受付用の文字列と受付キーだけをGASに送信します。通信結果が確認できないときは、来客名簿のE・F列を確認してください。</p>
+  <p class="footnote">氏名・メールアドレス・名簿はこのページに保存しません。保存オプションを選んだ場合は受付URLと受付キーのみ、この端末のブラウザ内に保持します。通信結果が確認できないときは来客名簿のE・F列を確認してください。</p>
 </main>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <script>
@@ -88,16 +110,65 @@ const urlInput = $('apiUrl');
 const keyInput = $('staffKey');
 const connect = $('connect');
 const startButton = $('start');
-const nextButton = $('next');
+const rememberCheck = $('rememberSettings');
+const clearSavedButton = $('clearSaved');
+const SAVED_SETTINGS_KEY = 'reception_device_credentials_v1';
+const URL_SETTING_KEY = 'reception_gas_url';
 let apiUrl = '';
-let staffKey = ''; // メモリ内だけに保存。localStorageには入れない。
+let staffKey = ''; // 保存を選ばない場合はページを閉じると消える。
+
+// URLと受付キーは同じ接続先として一組で保持する。
+// 受付キーは公開リポジトリのHTMLには絶対に埋め込まない。
+function readSavedSettings() {
+  try {
+    const raw = localStorage.getItem(SAVED_SETTINGS_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    if (typeof value.url !== 'string' || typeof value.key !== 'string' || !value.key) return null;
+    return value;
+  } catch (_) {
+    return null;
+  }
+}
+function refreshSavedSettings() {
+  const saved = readSavedSettings();
+  $('savedNotice').classList.toggle('hidden', !saved);
+  clearSavedButton.classList.toggle('hidden', !saved);
+  rememberCheck.checked = !!saved;
+  keyInput.placeholder = saved && urlInput.value.trim() === saved.url
+    ? '保存済み（変更する場合だけ入力）'
+    : '受付キーを入力';
+}
+function initSavedSettings() {
+  const saved = readSavedSettings();
+  try { urlInput.value = saved?.url || localStorage.getItem(URL_SETTING_KEY) || ''; }
+  catch (_) { urlInput.value = saved?.url || ''; }
+  refreshSavedSettings();
+}
+initSavedSettings();
+urlInput.addEventListener('input', () => {
+  // 保存済みのキーは、保存時と同じURLにだけ使用する。
+  const saved = readSavedSettings();
+  keyInput.placeholder = saved && saved.url === urlInput.value.trim()
+    ? '保存済み（変更する場合だけ入力）'
+    : '受付キーを入力';
+});
 let scanner = null;
 let active = false;
-let busy = false;
 let starting = false;
-let lastToken = ''; // カメラ前に同じQRが残っているときの連続発火防止。
-let sequence = 0;
-urlInput.value = localStorage.getItem('reception_gas_url') || '';
+let pausedByError = false;
+let processing = false;
+let processingEntry = null;
+const queue = [];
+const history = [];
+const recentTokens = new Map();
+let lastVisibleToken = '';
+let lastVisibleAt = 0;
+let session = 0;
+const MAX_QUEUE = 20;
+const REPEAT_BLOCK_MS = 2500;
+const CONTINUOUS_FRAME_MS = 1200;
+
 
 function updateStatus(text) { $('status').textContent = text; }
 function showResult(state, title, detail) {
@@ -230,9 +301,10 @@ connect.addEventListener('click', async () => {
     $('setupStatus').textContent = error.message;
     return;
   }
-  const inputKey = keyInput.value;
+  const saved = readSavedSettings();
+  const inputKey = keyInput.value || ((saved && saved.url === candidate) ? saved.key : '');
   if (inputKey.length < 12) {
-    $('setupStatus').textContent = '受付キーは12文字以上にしてください。';
+    $('setupStatus').textContent = '受付キーは12文字以上にしてください。未保存の場合は入力が必要です。';
     return;
   }
   apiUrl = candidate;
@@ -241,12 +313,27 @@ connect.addEventListener('click', async () => {
   try {
     $('diagnostics').open = true;
     await pingWithRetry();
-    localStorage.setItem('reception_gas_url', apiUrl);
+    // 接続成功した設定だけ保存する。保存しないときは古いキーも消す。
+    let saveWarning = '';
+    try {
+      localStorage.setItem(URL_SETTING_KEY, apiUrl);
+      if (rememberCheck.checked) {
+        localStorage.setItem(SAVED_SETTINGS_KEY, JSON.stringify({ url:apiUrl, key:inputKey }));
+      } else {
+        localStorage.removeItem(SAVED_SETTINGS_KEY);
+      }
+    } catch (_) {
+      saveWarning = '（端末への保存に失敗しました。次回は再入力が必要です）';
+    }
     staffKey = inputKey;
-    keyInput.value = ''; // 入力欄内にも残さない。
+    keyInput.value = ''; // パスワード欄の生入力値は消す。
+    refreshSavedSettings();
+    if (saveWarning) logDiagnostic(saveWarning);
     $('settings').classList.add('hidden');
     $('scannerPanel').classList.remove('hidden');
     $('setupStatus').textContent = '';
+    pausedByError = false;
+    session++;
     await startCamera();
   } catch (error) {
     $('setupStatus').textContent = error.message;
@@ -257,11 +344,42 @@ connect.addEventListener('click', async () => {
 
 async function stopCamera() {
   if (!scanner || !active) return;
+  // カメラは通常停止しない。設定変更時だけ停止。
   try { await scanner.stop(); } catch (error) { console.warn(error); }
   active = false;
 }
+
+function updateQueueStatus() {
+  const pendingCount = queue.length + (processingEntry ? 1 : 0);
+  $('queueStatus').textContent = '受付確認中・待機中：' + pendingCount + '件（最大' + MAX_QUEUE + '件待機）';
+  if (pausedByError) return;
+  if (active) {
+    updateStatus('連続読み取り中。次の方のQRコードをかざしてください。');
+  }
+}
+
+function addHistory(token) {
+  const li = document.createElement('li');
+  const idEl = document.createElement('span');
+  const statusEl = document.createElement('span');
+  idEl.className = 'entryToken';
+  statusEl.className = 'entryState';
+  idEl.textContent = token;
+  statusEl.textContent = '読取済み・待機中';
+  li.append(idEl, statusEl);
+  $('history').prepend(li);
+  const entry = { token, element:li, statusEl };
+  history.unshift(entry);
+  if (history.length > 8) history.pop().element.remove();
+  return entry;
+}
+function markHistory(entry, label, state = '') {
+  entry.statusEl.textContent = label;
+  entry.statusEl.className = 'entryState' + (state ? ' ' + state : '');
+}
+
 async function startCamera() {
-  if (active || starting || busy) return;
+  if (active || starting || pausedByError) return;
   if (typeof Html5Qrcode === 'undefined') {
     updateStatus('QRライブラリを読み込めませんでした。ネット接続を確認してください。');
     return;
@@ -272,14 +390,14 @@ async function startCamera() {
   try {
     if (!scanner) scanner = new Html5Qrcode('reader');
     await scanner.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 220, height: 220 } },
-      text => { void onScan(text); },
+      { facingMode:'environment' },
+      { fps:10, qrbox:{ width:220, height:220 } },
+      text => { onScan(text); },
       () => {}
     );
     active = true;
-    updateStatus('QRコードをカメラに向けてください。');
     startButton.classList.add('hidden');
+    updateQueueStatus();
   } catch (error) {
     console.error(error);
     updateStatus('カメラを起動できませんでした。カメラの許可を確認してください。');
@@ -290,32 +408,43 @@ async function startCamera() {
   }
 }
 
-async function onScan(decoded) {
-  if (busy || !active) return;
+/** カメラは止めず、読み取った受付IDだけを順番に処理する。 */
+function onScan(decoded) {
+  if (!active || pausedByError) return;
   const token = String(decoded).trim().toUpperCase();
-  if (token === lastToken) return;
-  busy = true;
-  lastToken = token;
-  sequence++;
-  const current = sequence;
-  await stopCamera();
-  nextButton.classList.remove('hidden');
-  startButton.classList.add('hidden');
+  const now = Date.now();
 
-  if (!/^TP-\d{4,}$/.test(token)) {
-    showResult('error', 'QRコードの形式が違います', '受付用のTP-0001形式ではありません。');
-    updateStatus('次のQRコードを読み取ってください。');
-    busy = false;
-    scheduleNext(current);
-    return;
+  // 同じQRがカメラ内に映り続けても1件として扱う。
+  const sameContinuousQr = token === lastVisibleToken &&
+                           (now - lastVisibleAt < CONTINUOUS_FRAME_MS);
+  lastVisibleToken = token;
+  lastVisibleAt = now;
+  if (sameContinuousQr) return;
+  if (now - (recentTokens.get(token) || 0) < REPEAT_BLOCK_MS) return;
+  recentTokens.set(token, now);
+  for (const [id, timestamp] of recentTokens) {
+    if (now - timestamp > 10000) recentTokens.delete(id);
   }
 
-  showResult('wait', '受付処理中…', token);
-  updateStatus('GASへ受付IDを送信しています。');
-  const requestId = makeId();
+  if (!/^TP-\d{4,}$/.test(token)) {
+    showResult('error', 'QRコードの形式が違います', 'TP-0001形式のQRコードを読み取ってください。');
+    return;
+  }
+  // 処理が遅いときに無制限にIDを溜め込まない。
+  if (queue.length >= MAX_QUEUE) {
+    showResult('error', '処理待ちが多すぎます', '受付処理が進むまでお待ちください。読み取ったIDは送信していません。');
+    return;
+  }
+  const entry = addHistory(token);
+  queue.push(entry);
+  showResult('wait', 'QRコードを読み取りました', token + '｜次の方も読み取れます');
+  updateQueueStatus();
+  void processQueue();
+}
 
-  // Google Apps Scriptは通常のCORS対応APIではない。
-  // POSTはno-corsで送信し、結果のみ読み取り専用JSONPで受け取る。
+/** POSTは1件につき1回だけ。受付結果は既存GASのJSONPで確認する。 */
+async function submitReception(token) {
+  const requestId = makeId();
   const post = fetch(apiUrl, {
     method: 'POST',
     mode: 'no-cors',
@@ -330,66 +459,108 @@ async function onScan(decoded) {
     await wait(850);
     try {
       const response = await getJsonp('result', requestId);
-      if (response.state !== 'pending') { result = response; break; }
+      if (response.state !== 'pending') {
+        result = response;
+        break;
+      }
     } catch (error) {
       console.warn('状態取得:', error);
     }
   }
-  void post; // 複数回の自動POSTはしない。タイムアウト時は名簿確認を促す。
-
-  if (!result) {
-    showResult('error', '通信結果を確認できません', '受付できている可能性があります。名簿を確認してください。');
-    updateStatus('通信タイムアウト。自動再送しません。');
-  } else if (result.state === 'ok') {
-    showResult('success', '受付完了', token);
-    updateStatus('受付を記録しました。');
-  } else if (result.state === 'already') {
-    showResult('notice', 'すでに受付済みです', token);
-    updateStatus('受付情報は変更していません。');
-  } else if (result.state === 'auth_error' || result.state === 'config_error') {
-    showResult('error', result.message, '受付設定を確認してください。');
-    updateStatus('受付設定に戻って修正してください。');
-    busy = false;
-    nextButton.classList.add('hidden');
-    startButton.classList.remove('hidden');
-    return;
-  } else {
-    showResult('error', result.message || '受付に失敗しました', token);
-    updateStatus('結果をご確認ください。');
-  }
-  busy = false;
-  scheduleNext(current);
+  void post; // 再送しない。結果不明時は名簿側の確認が必要。
+  return result;
 }
 
-function scheduleNext(id) {
-  updateStatus($('status').textContent + ' まもなく次の読み取りを開始します。');
-  setTimeout(() => {
-    if (id === sequence && !busy && !$('scannerPanel').classList.contains('hidden')) {
-      void startCamera();
+async function processQueue() {
+  if (processing || pausedByError) return;
+  processing = true;
+  const mySession = session;
+  try {
+    while (queue.length && !pausedByError && mySession === session) {
+      const entry = queue.shift();
+      processingEntry = entry;
+      markHistory(entry, 'GAS確認中');
+      updateQueueStatus();
+      let result;
+      try {
+        result = await submitReception(entry.token);
+      } catch (error) {
+        console.error('受付通信:', error);
+        result = null;
+      }
+      if (mySession !== session) return;
+
+      if (!result) {
+        markHistory(entry, '要確認（通信結果不明）', 'error');
+        showResult('error', '通信結果を確認できません', entry.token + '｜受付できている可能性があります。名簿を確認してください。');
+      } else if (result.state === 'ok') {
+        markHistory(entry, '受付完了', 'success');
+        showResult('success', '受付完了', entry.token);
+      } else if (result.state === 'already') {
+        markHistory(entry, '受付済み', 'notice');
+        showResult('notice', 'すでに受付済みです', entry.token);
+      } else if (result.state === 'auth_error' || result.state === 'config_error') {
+        markHistory(entry, '設定エラー', 'error');
+        pausedByError = true;
+        const unsent = queue.splice(0);
+        for (const item of unsent) markHistory(item, '未送信（設定エラー）', 'error');
+        showResult('error', result.message || '設定エラー', entry.token + '｜ほかの待機分は送信していません。設定を確認してください。');
+        updateStatus('受付を停止しました。接続設定に戻って確認してください。');
+        await stopCamera();
+      } else {
+        markHistory(entry, result.state === 'not_found' ? '未登録' : '受付エラー', 'error');
+        showResult('error', result.message || '受付に失敗しました', entry.token);
+      }
+      processingEntry = null;
+      updateQueueStatus();
     }
-  }, 2000);
+  } finally {
+    processingEntry = null;
+    processing = false;
+    updateQueueStatus();
+    // 処理終了直前に読み取りが追加された場合の取りこぼし防止。
+    if (queue.length && !pausedByError && mySession === session) void processQueue();
+  }
 }
 
-startButton.addEventListener('click', () => { lastToken = ''; void startCamera(); });
-nextButton.addEventListener('click', () => {
-  lastToken = '';
-  sequence++;
-  if (active) {
-    // 撮影中なら次のQRを読み込めるようにガードのみ解除。
-    updateStatus('次のQRコードを読み取れます。');
-  } else if (!busy) {
-    void startCamera();
+clearSavedButton.addEventListener('click', () => {
+  if (!confirm('この端末に保存した受付URLと受付キーを削除しますか？')) return;
+  try {
+    localStorage.removeItem(SAVED_SETTINGS_KEY);
+    localStorage.removeItem(URL_SETTING_KEY);
+    $('setupStatus').textContent = 'この端末の保存設定を削除しました。';
+  } catch (_) {
+    $('setupStatus').textContent = '保存設定を削除できませんでした。ブラウザのサイトデータを削除してください。';
+    return;
   }
+  urlInput.value = '';
+  keyInput.value = '';
+  staffKey = '';
+  refreshSavedSettings();
 });
+
+startButton.addEventListener('click', () => { void startCamera(); });
 $('editSettings').addEventListener('click', async () => {
-  sequence++;
+  if ((processingEntry || queue.length) &&
+      !confirm('受付処理中のIDがあります。未処理分は破棄されます。設定に戻りますか？')) return;
+  session++;
+  pausedByError = true;
+  queue.length = 0;
   await stopCamera();
   staffKey = '';
-  lastToken = '';
-  busy = false;
+  recentTokens.clear();
+  lastVisibleToken = '';
+  lastVisibleAt = 0;
   $('scannerPanel').classList.add('hidden');
   $('settings').classList.remove('hidden');
+  refreshSavedSettings();
   showResult('', '受付待機中', '設定を確認してください。');
+  $('queueStatus').textContent = '処理待ち：0件';
+});
+window.addEventListener('beforeunload', event => {
+  if (!processingEntry && queue.length === 0) return;
+  event.preventDefault();
+  event.returnValue = '';
 });
 </script>
 </body>
